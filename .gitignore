@@ -1,0 +1,8 @@
+# Secrets and personal data: API keys, sign-ins, contacts, addresses and reminders
+.env
+.env.*
+data/
+
+# Python
+__pycache__/
+*.pyc
