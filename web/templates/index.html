@@ -9,10 +9,27 @@
 </head>
 <body>
   <main>
+    <video id="camera" class="camera" autoplay muted playsinline aria-hidden="true"></video>
+    <div class="aim" aria-hidden="true"></div>
     <canvas id="ring" aria-hidden="true"></canvas>
-    <h1>Hii Ayra</h1>
+    <div class="center">
+      <h1>Hii Ayra</h1>
+      <p id="status" class="status" data-state="starting" role="status" aria-live="polite">
+        <span class="indicator" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="label">Waking up</span>
+      </p>
+    </div>
     <button id="stop" class="stop" type="button" aria-label="Stop Ayra"></button>
+    <div class="controls">
+      <button id="flip" class="control" type="button" aria-label="Switch camera" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9a8 8 0 0 1 14-3l2 2M20 15a8 8 0 0 1-14 3l-2-2M20 4v4h-4M4 20v-4h4"/></svg>
+      </button>
+      <button id="camera-toggle" class="control" type="button" aria-label="Turn camera on" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      </button>
+    </div>
   </main>
   <script src="{{ url_for('static', filename='ring.js') }}"></script>
+  <script src="{{ url_for('static', filename='camera.js') }}"></script>
 </body>
 </html>

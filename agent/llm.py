@@ -8,7 +8,7 @@ import anthropic
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from sarvamai import AsyncSarvamAI
 
-from agent import state
+from agent import state, vision
 from agent.graph import build_agent
 from agent.tools import new_turn
 from voice import text_to_speech as tts
@@ -20,6 +20,7 @@ MAX_GRAPH_STEPS = 20  # Stops a runaway loop of tool calls. An order can take se
 CLAUSE_END = re.compile(r"(?P<sentence>[.!?…]+[\"')\]]*\s|\n)|[,;:—]\s")
 MIN_CLAUSE_WORDS = 4  # Shorter pieces ending in a comma wait for more words, so speech doesn't sound choppy
 LIST_NUMBER = re.compile(r"\d+[.)]")
+CAMERA_NOTE = {"type": "text", "text": "[Camera picture]"}  # Marks where a picture was, once it's dropped from the history
 ABBREVIATIONS = {"dr.", "mr.", "mrs.", "ms.", "st.", "vs.", "e.g.", "i.e."}  # These full stops don't end a sentence
 
 
@@ -51,10 +52,15 @@ async def get_reply(
     user_text: str,
     clauses: asyncio.Queue,
     should_stop: Callable[[], bool],
+    image: dict | None = None,
 ) -> None:
-    """Run the agent on one finished turn, putting each clause on the queue as soon as it's complete"""
+    """Run the agent on one finished turn, putting each clause on the queue as soon as it's complete.
+    With the camera on, image is its newest picture, sent along with what the user said."""
     new_turn()
-    user_message = HumanMessage(user_text)
+    if image is None:
+        user_message = HumanMessage(user_text)
+    else:
+        user_message = HumanMessage([image, {"type": "text", "text": user_text}])
     print("🤖 ", end="", flush=True)
 
     error = None
@@ -144,6 +150,17 @@ async def get_reply(
     elif final:
         # Keep everything, including thinking and tool calls, as the API expects them back
         history[:] = final
+    _drop_old_pictures(history)
+
+
+def _drop_old_pictures(history: list) -> None:
+    """Swap camera pictures in earlier turns for a note, so each turn sends only the newest one"""
+    for index, message in enumerate(history):
+        if isinstance(message, HumanMessage) and isinstance(message.content, list):
+            if any(block.get("type") == "image" for block in message.content if isinstance(block, dict)):
+                content = [CAMERA_NOTE if isinstance(block, dict) and block.get("type") == "image" else block
+                           for block in message.content]
+                history[index] = HumanMessage(content)
 
 
 async def reply_worker(queue: asyncio.Queue) -> None:
@@ -153,20 +170,34 @@ async def reply_worker(queue: asyncio.Queue) -> None:
     history = []
     keep_output_awake()
     while True:
-        user_text = await queue.get()
-        # Turns that piled up while Ayra was busy are usually one thought split by pauses
+        items = [await queue.get()]
         while not queue.empty():
-            user_text += " " + queue.get_nowait()
+            items.append(queue.get_nowait())
+
+        # A fixed line means Ayra just woke up or is going to sleep. Only what the user said after it still counts.
+        line = None
+        says = [index for index, item in enumerate(items) if isinstance(item, tts.Say)]
+        if says:
+            line, items = items[says[-1]], items[says[-1] + 1:]
+            if not state.awake:
+                history.clear()  # Going to sleep ends the conversation, so "Hey Ayra" starts a fresh one
 
         state.update(state.THINKING)
         tts.turn_started = time.perf_counter()
         clauses = asyncio.Queue()
         speaker = asyncio.create_task(speak_clauses(tts_client, clauses))
-        # Stop the reply if Ayra was interrupted, or if the user has started a new turn
-        try:
-            await get_reply(agent, history, user_text, clauses, lambda: speaker.done() or not queue.empty())
-        except Exception as e:  # One bad reply must not stop Ayra answering for good
-            print(f"\n⚠️  Reply failed: {e!r}")
+        if items:
+            # Turns that piled up while Ayra was busy are usually one thought split by pauses
+            user_text = " ".join(items)
+            # Stop the reply if Ayra was interrupted, or if the user has started a new turn
+            should_stop = lambda: speaker.done() or not queue.empty()
+            try:
+                await get_reply(agent, history, user_text, clauses, should_stop, vision.image_block())
+            except Exception as e:  # One bad reply must not stop Ayra answering for good
+                print(f"\n⚠️  Reply failed: {e!r}")
+        else:
+            print(f"🤖 {line}")
+            clauses.put_nowait(str(line))
         clauses.put_nowait(None)
         try:
             await speaker

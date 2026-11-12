@@ -9,9 +9,11 @@ import re
 from voice import text_to_speech as tts
 
 HEADPHONES = False  # True only if the mic can't hear Ayra at all, as any clear speech then interrupts. Some wired headsets still leak.
-STOP_WORDS = {"stop", "wait", "ayra"}  # Interrupt Ayra, with headphones or on speakers
+STOP_WORDS = {"stop", "wait", "ayra", "aira", "enough"}  # Interrupt Ayra, with headphones or on speakers
 MIN_CLEAR_WORDS = 2  # With headphones, how many clear words it takes to interrupt
 MIN_WORD_CONFIDENCE = 0.8  # Noise usually transcribes as low-confidence words, which can't interrupt
+MIN_STOP_CONFIDENCE = 0.6  # A shouted "stop" over Ayra's voice is often heard less clearly, so it needs less
+MAX_RECOVERED_WORDS = 3  # How many of the user's first words can be taken back from the end of Ayra's echo
 MIN_TURN_CONFIDENCE = 0.6  # A finished turn averaging below this is treated as noise and ignored
 
 
@@ -28,8 +30,8 @@ def _find_user_start(heard: list[str], confidences: list[float]) -> int | None:
 
     # On speakers, a command word Ayra is saying itself doesn't count
     spoken = set() if HEADPHONES else _spoken_words()
-    for index in reversed(clear):  # Use the latest command, in case there are several
-        if heard[index] in STOP_WORDS and heard[index] not in spoken:
+    for index in reversed(range(len(heard))):  # Use the latest command, in case there are several
+        if heard[index] in STOP_WORDS and heard[index] not in spoken and confidences[index] >= MIN_STOP_CONFIDENCE:
             return index + 1  # The command itself isn't part of the question
 
     if HEADPHONES and len(clear) >= MIN_CLEAR_WORDS:
@@ -77,6 +79,14 @@ class TurnFilter:
             start = 0  # The mic can't hear Ayra through headphones, so it's all the user
         else:
             start = self.echo_end  # Flux can keep one turn open, so the user's words may follow Ayra's echo
+            # The user often starts talking just as Ayra finishes, so their first words land at the end of the echo.
+            # Take back clear words there that Ayra never said, as long as the user went on talking after them.
+            if start < len(words):
+                spoken = _spoken_words()
+                while (start > 0 and self.echo_end - start < MAX_RECOVERED_WORDS
+                       and heard[start - 1] and heard[start - 1] not in spoken
+                       and confidences[start - 1] >= MIN_WORD_CONFIDENCE):
+                    start -= 1
 
         overlapped = self.overlapped
         interrupted = self.user_start is not None

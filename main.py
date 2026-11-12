@@ -13,7 +13,7 @@ load_dotenv()  # API keys from .env, before the SDKs below are imported
 
 from flask import Flask, abort, jsonify, render_template, request
 
-from agent import state
+from agent import state, vision
 from agent.llm import reply_worker
 from voice import text_to_speech as tts
 from voice.speech_to_text import listen
@@ -22,6 +22,7 @@ STATIC_FILE_TYPES = (".js", ".css", ".png", ".ico", ".svg", ".jpg", ".webp", ".w
 PORT = 5050  # macOS often uses port 5000 for AirPlay
 
 app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
+app.config["MAX_CONTENT_LENGTH"] = 3_000_000  # Camera frames are well under this
 voice_loop = None  # The voice assistant's event loop, which runs in its own thread
 
 
@@ -60,6 +61,22 @@ def status():
 def stop():
     """Lets the page stop Ayra, for when the mic can't hear the user over Ayra's own voice"""
     stop_ayra("the website")
+    return "", 204
+
+
+@app.post("/camera/frame")
+def camera_frame():
+    """The page sends the camera's newest picture about once a second while camera mode is on"""
+    jpeg = request.get_data(cache=False)
+    if request.mimetype != "image/jpeg" or not jpeg.startswith(b"\xff\xd8") or len(jpeg) > vision.MAX_FRAME_BYTES:
+        abort(400)
+    vision.save_frame(jpeg)
+    return "", 204
+
+
+@app.post("/camera/off")
+def camera_off():
+    vision.camera_off()
     return "", 204
 
 

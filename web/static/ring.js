@@ -3,7 +3,7 @@
 const canvas = document.getElementById("ring");
 const ctx = canvas.getContext("2d");
 
-const SPINS = { starting: 0.45, listening: 0.45, thinking: 1.1, speaking: 1.6, offline: 0.2, on_call: 0.15 };  // Radians per second
+const SPINS = { starting: 0.45, sleeping: 0.12, listening: 0.45, thinking: 1.1, speaking: 1.6, offline: 0.2, on_call: 0.15 };  // Radians per second
 
 const COLORS = ["#16f2e6", "#14b9e0", "#3f6fe6", "#a44ff2", "#7b3fe4", "#2a8fe0", "#16f2e6"];
 const COLOR_START = -2.4;  // Where teal starts, before the ring has rotated
@@ -19,9 +19,16 @@ const BLEND_RATE = 6;  // How quickly the ring moves between states
 const STATUS_POLL_MS = 150;
 
 let width, height, radius;
+let fullRadius;  // The ring's size with the camera off
+let centerX, centerY;  // The ring's centre, which moves down while the camera is on
+let cameraBlend = 0;  // 0 with the camera off, 1 with it on
+let brightness = 1;  // Dims while Ayra is asleep
+const SLEEP_BRIGHTNESS = 0.35;
 let spin = 0;  // How far the ring has rotated
 let spinSpeed = SPINS.starting;
 let energy = 0;  // 0 normally, 1 while Ayra is speaking
+let breathPhase = 0;  // Where the title is in its breath
+const centerText = document.querySelector(".center");
 let state = "starting";
 let lastTime = null;
 
@@ -33,19 +40,33 @@ function resize() {
   canvas.height = height * scale;
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
   // The ribbons reach about 1.8 times the radius when stretched, so this keeps them on screen
-  radius = Math.min(width * 0.25, height * 0.25, 260);
-  document.documentElement.style.setProperty("--ring-radius", `${radius}px`);
+  fullRadius = Math.min(width * 0.25, height * 0.25, 260);
+  document.documentElement.style.setProperty("--ring-radius", `${fullRadius}px`);
+  placeRing();
+}
+
+// With the camera on, the ring shrinks to a glow near the bottom, clear of what the user is pointing at
+function placeRing() {
+  const small = Math.min(width * 0.13, height * 0.09, 90);
+  radius = fullRadius + (small - fullRadius) * cameraBlend;
+  centerX = width / 2;
+  centerY = height / 2 + (height - small * 2.6 - height / 2) * cameraBlend;
 }
 
 function gradient(angle) {
-  const g = ctx.createConicGradient(angle, width / 2, height / 2);
+  const g = ctx.createConicGradient(angle, centerX, centerY);
   COLORS.forEach((color, i) => g.addColorStop(i / (COLORS.length - 1), color));
   return g;
 }
 
 // How far the ring bulges at a given angle: 1 when idle, a changing stretched shape while speaking
+// Rises and falls a bit like speech. The ring's stretch and the title's pulse both follow it.
+function speechBeat(time) {
+  return 0.7 + 0.3 * Math.sin(time * 6.1) * Math.sin(time * 2.3);
+}
+
 function stretch(theta, time) {
-  const beat = 0.7 + 0.3 * Math.sin(time * 6.1) * Math.sin(time * 2.3);  // Rises and falls a bit like speech
+  const beat = speechBeat(time);
   return 1 + energy * beat * (
     0.13 * Math.sin(2 * theta + spin * 2)
     + 0.06 * Math.sin(3 * theta - spin * 1.5)
@@ -55,10 +76,10 @@ function stretch(theta, time) {
 function drawRibbon(ribbon, time) {
   const phase = ribbon.offset + spin * ribbon.turn;
   const spread = ribbon.spread * (1 + energy * 1.2);
-  const cx = width / 2 + radius * (ribbon.shift[0] * Math.cos(spin) - ribbon.shift[1] * Math.sin(spin));
-  const cy = height / 2 + radius * (ribbon.shift[0] * Math.sin(spin) + ribbon.shift[1] * Math.cos(spin));
+  const cx = centerX + radius * (ribbon.shift[0] * Math.cos(spin) - ribbon.shift[1] * Math.sin(spin));
+  const cy = centerY + radius * (ribbon.shift[0] * Math.sin(spin) + ribbon.shift[1] * Math.cos(spin));
 
-  ctx.globalAlpha = ribbon.alpha;
+  ctx.globalAlpha = ribbon.alpha * brightness;
   ctx.lineWidth = 1;
 
   for (let s = 0; s < STRANDS; s++) {
@@ -83,14 +104,14 @@ function drawRibbon(ribbon, time) {
 function drawCore(time) {
   // Wide, faint strokes build the glow around a bright line
   [[0.3, 0.05], [0.18, 0.1], [0.1, 0.2], [0.055, 1]].forEach(([thickness, alpha]) => {
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * brightness;
     ctx.lineWidth = radius * thickness;
     ctx.beginPath();
     for (let i = 0; i <= STEPS; i++) {
       const theta = (i / STEPS) * Math.PI * 2;
       const r = radius * stretch(theta, time);
-      const x = width / 2 + r * Math.cos(theta);
-      const y = height / 2 + r * Math.sin(theta);
+      const x = centerX + r * Math.cos(theta);
+      const y = centerY + r * Math.sin(theta);
       i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     }
     ctx.closePath();
@@ -117,9 +138,48 @@ function animate(now) {
   energy += ((state === "speaking" ? 1 : 0) - energy) * blend;
   spinSpeed += ((SPINS[state] ?? SPINS.listening) - spinSpeed) * blend;
   spin += spinSpeed * elapsed;
+  cameraBlend += ((document.body.classList.contains("camera-on") ? 1 : 0) - cameraBlend) * blend;
+  brightness += ((state === "sleeping" ? SLEEP_BRIGHTNESS : 1) - brightness) * blend * 0.5;  // Fades a little slower, like dozing off
+  placeRing();
+
+  // The title breathes with the ring: slowly when listening, quicker as the ring spins faster,
+  // and pulsing with the same beat as the ring's stretch while Ayra speaks
+  breathPhase += elapsed * (1.2 + spinSpeed * 1.5);  // Slowest while asleep, as the ring barely turns
+  const breath = 0.5 + 0.5 * Math.sin(breathPhase);
+  const beat = speechBeat(time);
+  centerText.style.setProperty("--breath", (1 + 0.02 * breath + 0.035 * energy * beat).toFixed(4));
+  centerText.style.setProperty("--glow", (0.25 + 0.4 * breath * (1 - energy) + energy * (0.45 + 0.55 * beat)).toFixed(3));
 
   draw(time);
   requestAnimationFrame(animate);
+}
+
+// The label under the title, faded out and back in when Ayra's state changes
+const STATUS_LABELS = {
+  starting: "Waking up",
+  sleeping: "Say “Hey Ayra”",
+  listening: "Listening",
+  thinking: "Working",
+  speaking: "Speaking",
+  on_call: "On a call",
+  offline: "Reconnecting",
+};
+const STATUS_FADE_MS = 250;  // Matches the transition in style.css
+const statusPill = document.getElementById("status");
+const statusLabel = statusPill.querySelector(".label");
+let shownState = "starting";
+let statusTimer = null;
+
+function showStatus(newState) {
+  if (newState === shownState || !(newState in STATUS_LABELS)) return;
+  shownState = newState;
+  clearTimeout(statusTimer);
+  statusPill.classList.add("changing");
+  statusTimer = setTimeout(() => {
+    statusPill.dataset.state = newState;
+    statusLabel.textContent = STATUS_LABELS[newState];
+    statusPill.classList.remove("changing");
+  }, STATUS_FADE_MS);
 }
 
 async function pollStatus() {
@@ -129,6 +189,7 @@ async function pollStatus() {
   } catch {
     state = "offline";
   }
+  showStatus(state);
   setTimeout(pollStatus, STATUS_POLL_MS);
 }
 
@@ -152,9 +213,19 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// camera.js calls this. Without animation, jump straight to the new place.
+function cameraChanged() {
+  if (!reducedMotion) return;
+  cameraBlend = document.body.classList.contains("camera-on") ? 1 : 0;
+  placeRing();
+  draw(0);
+}
+
 resize();
 pollStatus();
-if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+if (reducedMotion) {
   draw(0);
 } else {
   requestAnimationFrame(animate);

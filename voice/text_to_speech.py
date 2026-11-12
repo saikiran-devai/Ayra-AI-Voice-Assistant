@@ -19,6 +19,7 @@ FILLER = "Let me check."  # Said as soon as a tool starts, so the wait isn't sil
 FILLER_PAUSE_SECONDS = 0.4  # Silence after the filler, so the answer doesn't run straight on from it
 TAIL_PADDING_SECONDS = 0.25  # Silence after the last word, as the player stops slightly before its audio has finished
 ECHO_TAIL_SECONDS = 0.5  # Keep treating the mic as echo this long after Ayra finishes
+PLAYER_RETRY_SECONDS = 0.3  # Wait before restarting a player that couldn't open the speaker
 
 FFPLAY = ["ffplay", "-loglevel", "error", "-nodisp"]  # Audio only, no window
 
@@ -26,6 +27,12 @@ speaking = asyncio.Event()  # Set from the moment Ayra starts preparing speech u
 last_spoken = ""  # What Ayra said most recently, used to recognise its own voice in the mic
 
 turn_started = None  # When Ayra began working on the current reply, for the timing line
+
+
+
+class Say(str):
+    """A fixed line for Ayra to say straight away, without asking Claude, like "Yes?" after "Hey Ayra" """
+
 
 _player = None
 _interrupted = False
@@ -51,6 +58,23 @@ async def _start_player() -> asyncio.subprocess.Process:
         "-i", "pipe:0",             # Read the audio from stdin
         stdin=asyncio.subprocess.PIPE,
     )
+
+
+async def _play(data: bytes) -> None:
+    """Send audio to the player. If the player quit by itself, usually because macOS was switching speakers
+    as it started, start a new one and carry on, rather than staying silent for the rest of the reply."""
+    global _player
+    try:
+        _player.stdin.write(data)
+        await _player.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        if _interrupted:
+            raise
+        print("\n🔈 The speaker didn't open, trying again")
+        await asyncio.sleep(PLAYER_RETRY_SECONDS)
+        _player = await _start_player()
+        _player.stdin.write(_silence(LEAD_IN_SECONDS) + data)
+        await _player.stdin.drain()  # A second failure ends this reply, so it can't loop
 
 
 def _speakable(text: str) -> str:
@@ -97,25 +121,25 @@ async def speak_clauses(client: AsyncSarvamAI, clauses: asyncio.Queue) -> None:
                     if turn_started is not None:
                         print(f"\n⏱️  First audio after {time.perf_counter() - turn_started:.1f}s")
 
-                _player.stdin.write(chunk)
-                await _player.stdin.drain()
+                await _play(chunk)
 
             if clause == FILLER and _player is not None and not _interrupted:
-                _player.stdin.write(_silence(FILLER_PAUSE_SECONDS))
-                await _player.stdin.drain()
+                await _play(_silence(FILLER_PAUSE_SECONDS))
 
         if _player is None or _interrupted:
             return
 
         # Let the player finish whatever audio it still has buffered
-        _player.stdin.write(_silence(TAIL_PADDING_SECONDS))
+        await _play(_silence(TAIL_PADDING_SECONDS))
         _player.stdin.close()
         await _player.wait()
         state.update(state.LISTENING)
         if _player.returncode == 0:  # Finished by itself, rather than being interrupted
             await asyncio.sleep(ECHO_TAIL_SECONDS)  # Flux may still be transcribing Ayra's last words
     except (BrokenPipeError, ConnectionResetError):
-        pass  # interrupt() closed the player while audio was still arriving
+        if not _interrupted:
+            print("⚠️  Couldn't play audio. Check the Mac's sound output.")
+        # Otherwise interrupt() closed the player while audio was still arriving
     except ApiError as e:
         print(f"⚠️  Sarvam text-to-speech error {e.status_code}: {e.body}")
     finally:
