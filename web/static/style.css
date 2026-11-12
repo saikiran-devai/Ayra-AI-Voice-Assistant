@@ -91,7 +91,6 @@ h1 {
   transform: translateY(0.35em);
 }
 
-.status[data-state="sleeping"] { --dot: #6f7bd8; color: #8d90bf; }
 .status[data-state="listening"] { --dot: #16f2e6; border-color: rgba(22, 242, 230, 0.22); }
 .status[data-state="thinking"] { --dot: #a44ff2; border-color: rgba(164, 79, 242, 0.25); }
 .status[data-state="speaking"] { --dot: #7f8cff; border-color: rgba(127, 140, 255, 0.28); }
@@ -116,7 +115,7 @@ h1 {
 }
 
 /* One dot for the calm states */
-.status:is([data-state="listening"], [data-state="starting"], [data-state="sleeping"], [data-state="on_call"], [data-state="offline"]) .indicator i:not(:first-child) {
+.status:is([data-state="listening"], [data-state="starting"], [data-state="on_call"], [data-state="offline"]) .indicator i:not(:first-child) {
   display: none;
 }
 
@@ -130,19 +129,6 @@ h1 {
 /* Waking up: a slow fade */
 .status[data-state="starting"] .indicator i {
   animation: fade 1.4s ease-in-out infinite;
-}
-
-/* Asleep: a very slow fade, like breathing in sleep */
-.status[data-state="sleeping"] .indicator i {
-  animation: fade 3.2s ease-in-out infinite;
-}
-
-/* The title dims with the ring while Ayra is asleep */
-h1 {
-  transition: opacity 1.2s ease;
-}
-body:has(.status[data-state="sleeping"]) h1 {
-  opacity: 0.5;
 }
 
 /* Working: three dots taking turns */

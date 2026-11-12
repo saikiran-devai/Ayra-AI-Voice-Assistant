@@ -6,7 +6,6 @@ from deepgram.core.events import EventType
 
 from agent import state
 from agent.tools import contact_names
-from voice import text_to_speech as tts
 from voice.barge_in import TurnFilter
 
 # Microphone input for ffmpeg, in avfoundation's "video:audio" format (no video, default audio device).
@@ -18,16 +17,7 @@ MIC_CHUNK_BYTES = 1024  # About 32ms of audio
 MIC_READY_BYTES = MIC_SAMPLE_RATE  # About 0.5s of audio at 2 bytes per sample, enough to know the mic has settled
 MAX_CONTACT_KEYTERMS = 50
 RESUME_PHRASE = re.compile(r"\b(ayra|ira|aira)\b.*\b(back|resume|done|finished|listen)", re.IGNORECASE)  # "Ayra, I'm back"
-NAME = r"(?:ayra|aira|ayira|eira|ira|ara|era)"  # How Flux tends to hear "Ayra"
-WAKE_PHRASE = re.compile(rf"\b(?:hey|hi|hello|okay|ok)\b[\s,.!-]*{NAME}\b", re.IGNORECASE)  # "Hey Ayra"
-SLEEP_PHRASE = re.compile(
-    rf"\b(?:bye|bye-bye|goodbye|good bye|good night)\b[\s,.!-]*{NAME}\b"  # "Bye Ayra"
-    rf"|\b{NAME}\b[\s,.!-]*(?:go to sleep|bye\b)",  # "Ayra, go to sleep" or "Ayra, bye"
-    re.IGNORECASE,
-)
-WAKE_REPLY = "Yes?"
-SLEEP_REPLY = "Bye! I'll be here when you need me."
-KEYTERMS = ["Ayra", "stop", "Jyotirlinga", "Jyotirlingas", "Jyotirling", "Jyotirlings", "Swiggy", "Instamart"]  # Unusual words Flux should listen out for
+KEYTERMS = ["Ayra", "stop", "Jyotirlinga", "Jyotirlingas", "Jyotirling", "Jyotirlings", "Swiggy", "Instamart","Bindu Marraige Hall"]  # Unusual words Flux should listen out for
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -78,40 +68,11 @@ async def stream_microphone(connection) -> None:
     while chunk := await process.stdout.read(MIC_CHUNK_BYTES):
         await connection.send_media(chunk)
         if bytes_sent < MIC_READY_BYTES <= bytes_sent + len(chunk):
-            print("🎙️  Listening to your microphone - say \"Hey Ayra\" to wake me, \"Bye Ayra\" to put me to sleep, Ctrl+C to quit")
+            print("🎙️  Listening to your microphone - press Ctrl+C to stop")
             state.update(state.LISTENING)
         bytes_sent += len(chunk)
     await process.wait()
     print("⚠️  The microphone stopped sending audio - restart Ayra")
-
-
-def route_turn(user_text: str | None, heard: str, kept_words: list, turn_queue: asyncio.Queue) -> None:
-    """Decide what a finished turn means: wake Ayra, put it to sleep, a question to answer, or nothing.
-    user_text is the user's own words, after Ayra's echo is removed, and heard is everything Flux heard."""
-    if state.awake:
-        # Checked on everything heard, as "Bye Ayra" said over Ayra's voice counts as a command and gets cut from user_text.
-        # Ayra never says it, so it can't be Ayra's own echo.
-        if SLEEP_PHRASE.search(heard) and not SLEEP_PHRASE.search(tts.last_spoken):
-            print(f"🎤 {heard}\n😴 Going to sleep - say \"Hey Ayra\" to wake me")
-            tts.interrupt()
-            state.sleep()
-            turn_queue.put_nowait(tts.Say(SLEEP_REPLY))
-            return
-    elif user_text:
-        wake = WAKE_PHRASE.search(user_text)
-        if not wake:
-            print(f"💤 Asleep, so ignored: {user_text}")
-            return
-        print("👋 Awake")
-        state.wake()
-        if not re.search(r"[a-z0-9]", user_text[wake.end():], re.IGNORECASE):
-            turn_queue.put_nowait(tts.Say(WAKE_REPLY))  # Just "Hey Ayra", so answer at once, without Claude
-            return
-
-    if user_text:
-        print(f"🎤 {user_text}")
-        print_confidence(kept_words)
-        turn_queue.put_nowait(mark_unclear(kept_words) or user_text)
 
 
 async def listen(turn_queue: asyncio.Queue) -> None:
@@ -133,8 +94,10 @@ async def listen(turn_queue: asyncio.Queue) -> None:
                         print("📞 Ignored during your call")
                 return
             user_text = turn_filter.process(message.words, message.event)
-            if message.event == "EndOfTurn":
-                route_turn(user_text, message.transcript, turn_filter.kept_words, turn_queue)
+            if user_text:
+                print(f"🎤 {user_text}")
+                print_confidence(turn_filter.kept_words)
+                turn_queue.put_nowait(mark_unclear(turn_filter.kept_words) or user_text)
         elif getattr(message, "type", None) == "Connected":
             print("✅ Connected to Deepgram Flux - Ready for audio!")
 

@@ -170,34 +170,21 @@ async def reply_worker(queue: asyncio.Queue) -> None:
     history = []
     keep_output_awake()
     while True:
-        items = [await queue.get()]
+        user_text = await queue.get()
+        # Turns that piled up while Ayra was busy are usually one thought split by pauses
         while not queue.empty():
-            items.append(queue.get_nowait())
-
-        # A fixed line means Ayra just woke up or is going to sleep. Only what the user said after it still counts.
-        line = None
-        says = [index for index, item in enumerate(items) if isinstance(item, tts.Say)]
-        if says:
-            line, items = items[says[-1]], items[says[-1] + 1:]
-            if not state.awake:
-                history.clear()  # Going to sleep ends the conversation, so "Hey Ayra" starts a fresh one
+            user_text += " " + queue.get_nowait()
 
         state.update(state.THINKING)
         tts.turn_started = time.perf_counter()
         clauses = asyncio.Queue()
         speaker = asyncio.create_task(speak_clauses(tts_client, clauses))
-        if items:
-            # Turns that piled up while Ayra was busy are usually one thought split by pauses
-            user_text = " ".join(items)
-            # Stop the reply if Ayra was interrupted, or if the user has started a new turn
-            should_stop = lambda: speaker.done() or not queue.empty()
-            try:
-                await get_reply(agent, history, user_text, clauses, should_stop, vision.image_block())
-            except Exception as e:  # One bad reply must not stop Ayra answering for good
-                print(f"\n⚠️  Reply failed: {e!r}")
-        else:
-            print(f"🤖 {line}")
-            clauses.put_nowait(str(line))
+        # Stop the reply if Ayra was interrupted, or if the user has started a new turn
+        should_stop = lambda: speaker.done() or not queue.empty()
+        try:
+            await get_reply(agent, history, user_text, clauses, should_stop, vision.image_block())
+        except Exception as e:  # One bad reply must not stop Ayra answering for good
+            print(f"\n⚠️  Reply failed: {e!r}")
         clauses.put_nowait(None)
         try:
             await speaker

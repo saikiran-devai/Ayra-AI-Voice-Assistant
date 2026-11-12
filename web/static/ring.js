@@ -3,7 +3,7 @@
 const canvas = document.getElementById("ring");
 const ctx = canvas.getContext("2d");
 
-const SPINS = { starting: 0.45, sleeping: 0.12, listening: 0.45, thinking: 1.1, speaking: 1.6, offline: 0.2, on_call: 0.15 };  // Radians per second
+const SPINS = { starting: 0.45, listening: 0.45, thinking: 1.1, speaking: 1.6, offline: 0.2, on_call: 0.15 };  // Radians per second
 
 const COLORS = ["#16f2e6", "#14b9e0", "#3f6fe6", "#a44ff2", "#7b3fe4", "#2a8fe0", "#16f2e6"];
 const COLOR_START = -2.4;  // Where teal starts, before the ring has rotated
@@ -22,8 +22,6 @@ let width, height, radius;
 let fullRadius;  // The ring's size with the camera off
 let centerX, centerY;  // The ring's centre, which moves down while the camera is on
 let cameraBlend = 0;  // 0 with the camera off, 1 with it on
-let brightness = 1;  // Dims while Ayra is asleep
-const SLEEP_BRIGHTNESS = 0.35;
 let spin = 0;  // How far the ring has rotated
 let spinSpeed = SPINS.starting;
 let energy = 0;  // 0 normally, 1 while Ayra is speaking
@@ -79,7 +77,7 @@ function drawRibbon(ribbon, time) {
   const cx = centerX + radius * (ribbon.shift[0] * Math.cos(spin) - ribbon.shift[1] * Math.sin(spin));
   const cy = centerY + radius * (ribbon.shift[0] * Math.sin(spin) + ribbon.shift[1] * Math.cos(spin));
 
-  ctx.globalAlpha = ribbon.alpha * brightness;
+  ctx.globalAlpha = ribbon.alpha;
   ctx.lineWidth = 1;
 
   for (let s = 0; s < STRANDS; s++) {
@@ -104,7 +102,7 @@ function drawRibbon(ribbon, time) {
 function drawCore(time) {
   // Wide, faint strokes build the glow around a bright line
   [[0.3, 0.05], [0.18, 0.1], [0.1, 0.2], [0.055, 1]].forEach(([thickness, alpha]) => {
-    ctx.globalAlpha = alpha * brightness;
+    ctx.globalAlpha = alpha;
     ctx.lineWidth = radius * thickness;
     ctx.beginPath();
     for (let i = 0; i <= STEPS; i++) {
@@ -139,12 +137,11 @@ function animate(now) {
   spinSpeed += ((SPINS[state] ?? SPINS.listening) - spinSpeed) * blend;
   spin += spinSpeed * elapsed;
   cameraBlend += ((document.body.classList.contains("camera-on") ? 1 : 0) - cameraBlend) * blend;
-  brightness += ((state === "sleeping" ? SLEEP_BRIGHTNESS : 1) - brightness) * blend * 0.5;  // Fades a little slower, like dozing off
   placeRing();
 
   // The title breathes with the ring: slowly when listening, quicker as the ring spins faster,
   // and pulsing with the same beat as the ring's stretch while Ayra speaks
-  breathPhase += elapsed * (1.2 + spinSpeed * 1.5);  // Slowest while asleep, as the ring barely turns
+  breathPhase += elapsed * (1.2 + spinSpeed * 1.5);
   const breath = 0.5 + 0.5 * Math.sin(breathPhase);
   const beat = speechBeat(time);
   centerText.style.setProperty("--breath", (1 + 0.02 * breath + 0.035 * energy * beat).toFixed(4));
@@ -157,7 +154,6 @@ function animate(now) {
 // The label under the title, faded out and back in when Ayra's state changes
 const STATUS_LABELS = {
   starting: "Waking up",
-  sleeping: "Say “Hey Ayra”",
   listening: "Listening",
   thinking: "Working",
   speaking: "Speaking",

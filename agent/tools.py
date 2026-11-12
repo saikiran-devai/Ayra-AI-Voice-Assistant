@@ -33,7 +33,7 @@ DEFAULT_TIMEZONE = "Asia/Kolkata"  # IST
 TIMEZONE_ALIASES = {"ist": "Asia/Kolkata", "utc": "UTC", "gmt": "UTC"}
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"  # Every JSON file Ayra reads or writes lives here
 REMINDERS_FILE = DATA_DIR / "reminders.json"
-SAVED_PLACES_FILE = DATA_DIR / "saved_places.json"  # The user's home and work addresses
+SAVED_PLACES_FILE = DATA_DIR / "saved_places.json"  # The user's places by name, such as home and work, to their addresses
 GMAIL_CLIENT_FILE = DATA_DIR / "ayra-gcp-creds.json"  # The Google Cloud OAuth client, for scripts/gmail_auth.py
 GMAIL_TOKEN_FILE = DATA_DIR / "gmail_token.json"  # The user's saved Gmail access, made by scripts/gmail_auth.py
 GMAIL_SCOPES = [
@@ -118,6 +118,7 @@ MAX_NEARBY_RESULTS = 5
 NEARBY_RADIUS_METERS = 5000
 TRAVEL_MODES = {"drive": "DRIVE", "walk": "WALK", "transit": "TRANSIT"}
 MODE_WORDS = {"drive": "by car", "walk": "on foot", "transit": "by public transport"}
+PLACE_MATCH = 0.8  # How alike a place name must be to a saved place, so "Bindu marriage hall" finds "Bindu Marraige Hall"
 PLACE_ALIASES = {"my home": "home", "my house": "home", "house": "home", "office": "work", "my office": "work", "my work": "work"}
 
 WEATHER_CODES = {
@@ -494,22 +495,34 @@ async def _search_places(query: str, field_mask: str, count: int, **extra) -> li
     )
     return data.get("places", [])
 
-def _saved_address(name: str) -> str:
-    """Return the address saved as home or work"""
+def _saved_places() -> dict[str, str]:
+    """The user's saved places, name to address"""
     try:
         saved = json.loads(SAVED_PLACES_FILE.read_text())
     except (OSError, ValueError):
-        saved = {}
-    address = str(saved.get(name, "")).strip()
-    if not address:
-        raise ToolError("not_configured", f"I don't know your {name} address yet. Please add it to data/saved_places.json.")
-    return address
+        return {}
+    if not isinstance(saved, dict):
+        return {}
+    return {str(name).strip(): str(address).strip() for name, address in saved.items() if str(address).strip()}
+
+
+def saved_place_names() -> list[str]:
+    """Names of the user's saved places, so Claude knows it can use them"""
+    return list(_saved_places())
+
 
 def _resolve_place(place: str) -> str:
-    """Swap "home" or "work" for the saved address, and leave any other place as it is"""
+    """Swap a saved place's name for its address, allowing for mishearing and misspelling, and leave any other place as it is"""
     text = place.strip().lower().rstrip(".?!")
     text = PLACE_ALIASES.get(text, text)
-    return _saved_address(text) if text in ("home", "work") else place.strip()
+    text = re.sub(r"^(?:my|the)\s+", "", text)
+    saved = _saved_places()
+    if text in ("home", "work") and not any(name.lower() == text for name in saved):
+        raise ToolError("not_configured", f"I don't know your {text} address yet. Please add it to data/saved_places.json.")
+    scored = [(SequenceMatcher(None, _letters(text), _letters(name)).ratio(), name) for name in saved if _letters(name)]
+    if scored and (best := max(scored))[0] >= PLACE_MATCH:
+        return saved[best[1]]
+    return place.strip()
 
 def _say_duration(seconds: int) -> str:
     minutes = max(1, round(seconds / 60))
@@ -547,7 +560,7 @@ async def geocode_place(place: str) -> dict:
     read out the options and ask which one the user means.
 
     Args:
-        place: The place name, such as Apollo Hospital Mumbai, or home or work.
+        place: The place name, such as Apollo Hospital Mumbai, or the name of a saved place like home or work.
     """
     if not place.strip():
         raise ToolError("invalid_input", "Which place should I look up?")
@@ -577,8 +590,8 @@ async def get_directions(destination: str, origin: str = "home", mode: str = "dr
     """Get the travel time, distance and a short summary of a route.
 
     Args:
-        destination: Where to go. A place or address, or the word home or work for the user's saved places.
-        origin: Where to start. A place or address, or home or work. Defaults to home.
+        destination: Where to go. A place or address, or the name of one of the user's saved places, like home or work.
+        origin: Where to start. A place or address, or a saved place's name. Defaults to home.
         mode: How to travel, one of drive, walk or transit. Defaults to drive.
     """
     mode = mode.strip().lower()
@@ -630,7 +643,7 @@ async def find_nearby(category: str, location: str = "home", limit: int = 3) -> 
 
     Args:
         category: The kind of place, such as pharmacy or coffee shop.
-        location: Where to search around. A place or address, or home or work. Defaults to home.
+        location: Where to search around. A place or address, or a saved place's name. Defaults to home.
         limit: How many places to return. Defaults to 3.
     """
     if not category.strip():

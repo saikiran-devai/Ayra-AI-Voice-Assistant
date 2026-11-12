@@ -30,10 +30,6 @@ turn_started = None  # When Ayra began working on the current reply, for the tim
 
 
 
-class Say(str):
-    """A fixed line for Ayra to say straight away, without asking Claude, like "Yes?" after "Hey Ayra" """
-
-
 _player = None
 _interrupted = False
 _clauses = None
